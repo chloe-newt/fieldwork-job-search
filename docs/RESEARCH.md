@@ -1,6 +1,6 @@
 # Source and architecture research
 
-Reviewed 21 September 2026, before implementation. The implementation is original; no third-party repository code was copied.
+Reviewed 21 September 2026, before implementation. The original implementation was developed independently. The later employer catalogue adapts third-party data with MIT attribution; see the follow-up below.
 
 | Primary source | Findings and architectural decision |
 |---|---|
@@ -20,3 +20,11 @@ Reviewed 21 September 2026, before implementation. The implementation is origina
 The standalone requirement drives the architecture: native Node.js 24, native SQLite, local browser assets, private runtime copy, standalone Windows launcher and ordinary Windows Task Scheduler. No ChatGPT memory, MCP connector, developer tooling, cloud hosting or OpenAI call is on the operating path.
 
 Source coverage is intentionally transparent. LinkedIn and Indeed browser searches and copied advert imports work without API keys; automatic scraping is not enabled. Browser links are not counted as source checks. A future source addition must document its access route, terms and schema rather than merely list a board name as “supported”.
+
+## Supplied AI Job Search follow-up
+
+Inspected the user-supplied `job-search-master.zip` as source material, without executing its skills, scripts or agent configuration. Its README identifies MadsLorentzen/ai-job-search and its MIT licence credits Mads Lorentzen (2026). The employer board catalogue is adapted with the licence retained in [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md). The DeepMind board from that archive returned HTTP 404 during validation and was omitted.
+
+The [official Ashby posting API documentation](https://developers.ashbyhq.com/docs/public-job-posting-api) informed the native connector, including secondary locations, listed/unlisted status, work pattern and compensation. The documentation describes `publishedAt` as last published, so it is not represented as first posted.
+
+[Indeed’s terms](https://www.indeed.com/legal) prohibit automated systems from accessing the site, in bulk or otherwise, without written permission except permitted robots crawling. A low request count is not an authorisation. Fieldwork adds a user-driven browser-search/pasted-advert workflow and local job-key deduplication. The archive’s Indeed scraper is not incorporated. No rate-limit, CAPTCHA, fingerprint or account-control circumvention is implemented.

@@ -1,3 +1,4 @@
+import {SOURCE_CATALOG} from './catalog.mjs';
 export const DEFAULTS = {
   origin:'', origin_routing:'', commute_limit:45, borderline_minutes:10,
   minimum_salary:0, include_keywords:'', exclude_keywords:'', auto_search:true, catch_up:true,
@@ -14,6 +15,7 @@ export const SOURCES = [
  ...['plant science','bioinformatics','environmental science','child development','research data analyst'].map((q,i)=>({id:`academic-${i}`,name:`jobs.ac.uk · ${q}`,type:'academic',query:q,interval_hours:24,employer_type:'University',credible:true})),
  {id:'greenhouse-isomorphic',name:'Isomorphic Labs',type:'greenhouse',board:'isomorphiclabs',interval_hours:48,employer_type:'Biotechnology',credible:true},
  {id:'greenhouse-alphasights',name:'AlphaSights',type:'greenhouse',board:'alphasights',interval_hours:24,employer_type:'Research and analytics',credible:true},
+ ...SOURCE_CATALOG.filter(s=>['synthesia','improbable','wayve'].includes(s.board)),
  ...['research assistant','data analyst','research technician','graduate analyst'].map((q,i)=>({id:`academic-london-${i}`,name:`jobs.ac.uk · London ${q}`,type:'academic',query:q,location:'London',interval_hours:24,employer_type:'University',credible:true})),
  {id:'lever-veeva',name:'Veeva',type:'lever',board:'veeva',interval_hours:48,employer_type:'Health technology',credible:true},
  {id:'smart-lgc',name:'LGC Group',type:'smartrecruiters',board:'LGCGroup',interval_hours:48,employer_type:'Scientific organisation',credible:true},

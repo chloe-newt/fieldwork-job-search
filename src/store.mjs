@@ -36,9 +36,16 @@ export class Store {
   ingest(raw,runId=null){
     const j=normalizeJob(raw);if(!j.title||!j.url)throw Error('A title and valid application URL are required');
     let existing=this.db.prepare('SELECT j.* FROM jobs j LEFT JOIN links l ON l.job_id=j.id WHERE j.url=? OR l.url=? LIMIT 1').get(j.url,j.url);
+    // Older saved Indeed URLs may contain tracking parameters or use vjk.
+    // Resolve these without rewriting stored jobs or losing application records.
+    if(!existing&&j.url.startsWith('https://uk.indeed.com/viewjob?jk=')){
+      const link=this.db.prepare("SELECT url,job_id FROM links WHERE url LIKE '%indeed.%'").all().find(l=>canonical(l.url)===j.url);
+      if(link)existing=this.db.prepare('SELECT * FROM jobs WHERE id=?').get(link.job_id);
+    }
     if(!existing&&normal(j.employer)!=='employer unverified'){
       existing=this.db.prepare('SELECT * FROM jobs WHERE employer_key=?').all(normal(j.employer)).find(r=>{
         const d=JSON.parse(r.data),sameRef=j.reference&&d.reference&&j.reference===d.reference;
+        if(j.url.startsWith('https://uk.indeed.com/viewjob?jk=')&&canonical(d.url).startsWith('https://uk.indeed.com/viewjob?jk=')&&canonical(d.url)!==j.url)return false;
         if(j.reference&&d.reference&&j.reference!==d.reference)return false;
         const recent=Math.abs(new Date(j.posting_date||now())-new Date(d.posting_date||r.first_seen))<45*86400000;
         return sameRef||(recent&&normal(d.location)===normal(j.location)&&similarity(j.title,d.title)>=0.9);

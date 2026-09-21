@@ -19,6 +19,13 @@ test('offline server API, CSRF, restart persistence and backup download',async t
   assert.equal((await post('settings',{minimum_salary:1},'bad')).status,403);
   const spoofStatus=await new Promise((resolve,reject)=>{const r=http.get(url+'/api/health',{headers:{Host:'evil.example'}},response=>{response.resume();resolve(response.statusCode)});r.on('error',reject)});
   assert.equal(spoofStatus,403);
+  const preview=await post('import-text',{url:'https://uk.indeed.com/jobs?vjk=abc123def456',description:'Job title: Research Assistant\nEmployer: Test lab\nLocation: London\nEssential\nPython research and analysis'});
+  assert.equal(preview.status,200);assert.equal(preview.body.job.verified_open,false);assert.equal(preview.body.job.source,'Indeed · pasted advert');
+  assert.equal((await(await fetch(url+'/api/state')).json()).jobs.length,0,'Preview must not save a vacancy');
+  const resolved=await post('source-draft',{url:'https://jobs.eu.lever.co/example/id'});assert.equal(resolved.body.source.region,'eu');
+  const source=await post('sources',{catalog_id:'catalog-greenhouse-riverlane'});assert.equal(source.status,200);assert.equal(source.body.existing,false);
+  const again=await post('sources',{catalog_id:'catalog-greenhouse-riverlane'});assert.equal(again.body.existing,true);assert.equal(again.body.id,source.body.id);
+  assert.equal((await post('sources',{catalog_id:'unknown'})).status,400);
   const created=await post('jobs',{title:'Research Assistant',employer:'Test lab',url:'https://example.org/test',description:'Python research biology',closing_date:'2001-01-01'});assert.equal(created.status,201);const id=created.body.id;
   assert.equal((await post(`jobs/${id}/application`,{status:'Applied',notes:'Retained after process restart',cv_version:'v2'})).status,200);
   assert.equal((await post(`jobs/${id}/application`,{status:'Invalid'})).status,400);

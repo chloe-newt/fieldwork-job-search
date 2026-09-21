@@ -9,6 +9,8 @@ import {route} from './src/commute.mjs';
 import {importURL} from './src/sources.mjs';
 import {canonical,now,dateOnly} from './src/util.mjs';
 import {FAMILIES,QUERIES} from './src/defaults.mjs';
+import {SOURCE_CATALOG,sourceFromURL} from './src/catalog.mjs';
+import {advertDraft} from './src/import.mjs';
 const ROOT=path.dirname(fileURLToPath(import.meta.url));
 const logDir=path.join(ROOT,'logs');fs.mkdirSync(logDir,{recursive:true});
 const logFile=path.join(logDir,'server.log');
@@ -46,7 +48,7 @@ if(args.includes('--backup')){
         const complete=store.db.prepare("SELECT * FROM runs WHERE status='success' AND checked>0 ORDER BY id DESC LIMIT 1").get();
         const due=sources.filter(s=>s.enabled&&s.type!=='manual'&&!(s.type==='brave'&&!cfg.brave_key)).map(s=>s.next_due).sort()[0]||null;
         send(res,200,{token:csrf,jobs:store.jobs(),sources,runs,last_success:last||null,last_all_success:complete||null,next_search:cfg.auto_search?due:null,busy:store.busy(),
-          settings:{...cfg,brave_key:cfg.brave_key?'configured':'',tfl_key:cfg.tfl_key?'configured':''},families:FAMILIES,queries:QUERIES,data_directory:DATA});return;
+          settings:{...cfg,brave_key:cfg.brave_key?'configured':'',tfl_key:cfg.tfl_key?'configured':''},families:FAMILIES,queries:QUERIES,source_catalog:SOURCE_CATALOG,data_directory:DATA});return;
       }
       if(p==='/api/search'&&req.method==='POST'){
         const b=await body(req);if(store.busy()){send(res,409,{error:'A search is already running'});return;}
@@ -63,14 +65,22 @@ if(args.includes('--backup')){
         store.saveSettings(out);store.reassess();send(res,200,{ok:true});return;
       }
       if(p==='/api/sources'&&req.method==='POST'){
-        const b=await body(req);const existing=store.sources().find(s=>s.id===b.id);
-        const s=existing?{...existing,enabled:!!b.enabled,interval_hours:Number(b.interval_hours||existing.interval_hours)}:{id:'custom-'+randomBytes(5).toString('hex'),name:String(b.name||'').slice(0,150),type:b.type,board:String(b.board||'').trim(),url:canonical(b.url),employer:String(b.employer||''),location:String(b.location||''),interval_hours:Number(b.interval_hours||48),enabled:true,credible:!!b.credible,permission_confirmed:!!b.permission_confirmed,employer_type:b.employer_type||'Unknown'};
-        if(!s.name||!['greenhouse','lever','smartrecruiters','rss','jsonld','manual','nhs','academic','brave'].includes(s.type))throw Error('Invalid source');
+        let b=await body(req);
+        if(b.catalog_id){const entry=SOURCE_CATALOG.find(s=>s.id===b.catalog_id);if(!entry)throw Error('Unknown catalogue source');b={...entry};delete b.id}
+        const existing=store.sources().find(s=>s.id===b.id);
+        const s=existing?{...existing,enabled:!!b.enabled,interval_hours:Number(b.interval_hours||existing.interval_hours)}:{id:'custom-'+randomBytes(5).toString('hex'),name:String(b.name||'').slice(0,150),type:b.type,board:String(b.board||'').trim(),region:b.region==='eu'?'eu':undefined,url:canonical(b.url),employer:String(b.employer||''),location:String(b.location||''),interval_hours:Number(b.interval_hours||48),enabled:true,credible:!!b.credible,permission_confirmed:!!b.permission_confirmed,employer_type:b.employer_type||'Unknown'};
+        if(!s.name||!['greenhouse','lever','ashby','smartrecruiters','rss','jsonld','manual','nhs','academic','brave'].includes(s.type))throw Error('Invalid source');
         if(!Number.isFinite(s.interval_hours)||s.interval_hours<1||s.interval_hours>720)throw Error('Source interval must be 1–720 hours');
-        if(['greenhouse','lever','smartrecruiters'].includes(s.type)&&!/^[a-zA-Z0-9_-]{1,100}$/.test(s.board))throw Error('Enter the employer board identifier, not a full URL');
+        if(['greenhouse','lever','ashby','smartrecruiters'].includes(s.type)){
+          if(!/^[a-zA-Z0-9_-]{1,100}$/.test(s.board))throw Error('Enter the employer board identifier, not a full URL');
+          const duplicate=!existing&&store.sources().find(x=>x.type===s.type&&x.board.toLowerCase()===s.board.toLowerCase()&&(x.region||'')===(s.region||''));
+          if(duplicate){send(res,200,{ok:true,id:duplicate.id,existing:true});return;}
+        }
         if(['rss','jsonld'].includes(s.type)&&!s.url.startsWith('https://'))throw Error('Use a public HTTPS source URL');
-        delete s.health;delete s.next_due;store.putSource(s);send(res,200,{ok:true});return;
+        delete s.health;delete s.next_due;store.putSource(s);send(res,200,{ok:true,id:s.id,existing:false});return;
       }
+      if(p==='/api/source-draft'&&req.method==='POST'){const b=await body(req);send(res,200,{source:sourceFromURL(String(b.url))});return;}
+      if(p==='/api/import-text'&&req.method==='POST'){send(res,200,{job:advertDraft(await body(req))});return;}
       if(p==='/api/import-url'&&req.method==='POST'){const b=await body(req);const job=await importURL(String(b.url));send(res,200,{job});return;}
       if(p==='/api/jobs'&&req.method==='POST'){
         const b=await body(req);if(!b.title||!b.employer||!b.url)throw Error('Title, employer and application URL are required');

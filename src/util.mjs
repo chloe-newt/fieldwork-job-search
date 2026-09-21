@@ -16,6 +16,10 @@ export function text(html = '') {
 }
 export function canonical(raw) {
   try { const u=new URL(raw);if(!['https:','http:'].includes(u.protocol))return '';u.hash='';
+    if(/(^|\.)indeed\.(?:com|co\.uk)$/.test(u.hostname)){
+      const key=u.searchParams.get('jk')||u.searchParams.get('vjk');
+      if(key&&/^[a-zA-Z0-9_-]{6,100}$/.test(key))return 'https://uk.indeed.com/viewjob?jk='+encodeURIComponent(key);
+    }
     for(const k of [...u.searchParams.keys()])if(/^(utm_|gh_src|lever-source|source$|referrer$|tracking|trk$|keyword$|location$|language$|sort$|country$)/i.test(k))u.searchParams.delete(k);
     u.searchParams.sort();u.hostname=u.hostname.toLowerCase();return u.toString().replace(/\/$/,'');
   }catch{return ''}

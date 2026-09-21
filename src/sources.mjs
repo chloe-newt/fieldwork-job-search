@@ -48,7 +48,21 @@ export async function fetchSource(source,settings,{query='',request=get,readPage
   const jobs=[],warnings=[];let limited=false,scanned=0,scopeFiltered=0;const q=query||source.query||'';
   const push=j=>{scanned++;const overseas=/\b(?:United States|USA|Canada|Germany|Switzerland|France|Australia|India|China|Netherlands|Ireland|Spain|Portugal|Italy|Poland|Japan|Singapore|New York|California|Boston|Toronto|Berlin|Dublin)\b/i.test(j.location||'')&&!/\b(?:UK|United Kingdom|London)\b/i.test(j.location||'');if(!relevantTitle(j.title)||overseas&&!j.remote_uk){scopeFiltered++;return}jobs.push(normalizeJob({...j,source:source.name,employer_type:source.employer_type||'Unknown',credible:!!source.credible}))};
   if(source.type==='manual')return {jobs,warnings:[source.note||'Manual source — open in browser and import advert'],manual:true};
-  if(source.type==='greenhouse'){
+  if(source.type==='ashby'){
+    const data=await request(`https://api.ashbyhq.com/posting-api/job-board/${encodeURIComponent(source.board)}?includeCompensation=true`,{json:true});
+    if(!Array.isArray(data.jobs))throw Error('Unexpected Ashby schema');
+    for(const j of data.jobs){
+      if(j.isListed===false)continue;
+      const address=j.address?.postalAddress||{},secondary=j.secondaryLocations||[];
+      const location=[j.location,address.addressCountry,...secondary.flatMap(x=>[x.location,x.address?.addressCountry])].filter(Boolean).join(' / ');
+      const work_pattern=({Remote:'Remote',Hybrid:'Hybrid',OnSite:'On-site'})[j.workplaceType]||(j.isRemote?'Remote':'Unknown');
+      const uk=/\b(?:UK|GB|GBR|United Kingdom|London)\b/i.test(location);
+      push({title:j.title,employer:source.name,location,description:j.descriptionPlain||j.descriptionHtml,url:j.jobUrl||j.applyUrl,reference:j.id||j.jobUrl,
+        posting_date:j.publishedAt,contract_type:j.employmentType,work_pattern,remote_uk:work_pattern==='Remote'&&uk,
+        salary:j.compensation?.compensationTierSummary||j.compensation?.scrapeableCompensationSalarySummary||'',
+        workplace:uk&&/\b(?:UK|GB|GBR|United Kingdom)\b/i.test(address.addressCountry||'')?address.postalCode||'':'',verified_open:true,direct:true});
+    }
+  }else if(source.type==='greenhouse'){
     const data=await get(`https://boards-api.greenhouse.io/v1/boards/${encodeURIComponent(source.board)}/jobs?content=true`,{json:true});if(!Array.isArray(data.jobs))throw Error('Unexpected Greenhouse schema');
     for(const j of data.jobs)push({title:j.title,employer:source.name,location:j.location?.name,description:j.content,url:j.absolute_url,reference:String(j.id),posting_date:j.first_published,verified_open:true,direct:true});
   }else if(source.type==='lever'){
