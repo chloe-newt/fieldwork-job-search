@@ -1,0 +1,31 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {spawn} from 'node:child_process';
+import net from 'node:net';
+import http from 'node:http';
+import {Store} from '../src/store.mjs';
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+test('offline server API, CSRF, restart persistence and backup download',async t=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'fieldwork-server-'));const store=new Store(dir);store.saveSettings({auto_search:false});store.close();
+  const socket=net.createServer();await new Promise(r=>socket.listen(0,'127.0.0.1',r));const port=socket.address().port;await new Promise(r=>socket.close(r));
+  const url=`http://127.0.0.1:${port}`;let child,output='';
+  async function start(){child=spawn(process.execPath,['server.mjs'],{env:{...process.env,FIELDWORK_DATA_DIR:dir,FIELDWORK_PORT:String(port)},windowsHide:true});child.stdout.on('data',d=>output+=d);child.stderr.on('data',d=>output+=d);for(let i=0;i<100;i++){try{const r=await fetch(url+'/api/health');if(r.ok)return}catch{}await sleep(50)}throw Error('Server did not start: '+output)}
+  t.after(async()=>{if(child&&child.exitCode===null){child.kill();await sleep(250)}fs.rmSync(dir,{recursive:true,force:true})});
+  await start();let state=await(await fetch(url+'/api/state')).json();
+  const post=async(p,b,token=state.token)=>{const r=await fetch(url+'/api/'+p,{method:'POST',headers:{'Content-Type':'application/json','X-Fieldwork-Token':token},body:JSON.stringify(b)});return {status:r.status,body:await r.json()}};
+  assert.equal((await post('settings',{minimum_salary:1},'bad')).status,403);
+  const spoofStatus=await new Promise((resolve,reject)=>{const r=http.get(url+'/api/health',{headers:{Host:'evil.example'}},response=>{response.resume();resolve(response.statusCode)});r.on('error',reject)});
+  assert.equal(spoofStatus,403);
+  const created=await post('jobs',{title:'Research Assistant',employer:'Test lab',url:'https://example.org/test',description:'Python research biology',closing_date:'2001-01-01'});assert.equal(created.status,201);const id=created.body.id;
+  assert.equal((await post(`jobs/${id}/application`,{status:'Applied',notes:'Retained after process restart',cv_version:'v2'})).status,200);
+  assert.equal((await post(`jobs/${id}/application`,{status:'Invalid'})).status,400);
+  const exited=new Promise(r=>child.once('exit',r));await post('shutdown',{});await exited;
+  await start();state=await(await fetch(url+'/api/state')).json();assert.equal(state.jobs[0].application.notes,'Retained after process restart');assert.equal(state.jobs[0].archived,false);
+  const snapshot=await post('backup',{});assert.equal(snapshot.status,200);const response=await fetch(url+snapshot.body.url);assert.equal(response.status,200);const buf=Buffer.from(await response.arrayBuffer());assert.equal(buf.subarray(0,15).toString(),'SQLite format 3');
+  const exportData=await(await fetch(url+'/api/export')).json();assert.equal(exportData.jobs[0].application.cv_version,'v2');assert.equal('brave_key' in exportData.settings,false);
+  const page=await fetch(url);assert.equal(page.status,200);assert.match(page.headers.get('content-security-policy'),/frame-ancestors 'none'/);
+  const done=new Promise(r=>child.once('exit',r));await post('shutdown',{});await done;
+});
