@@ -13,13 +13,13 @@ export async function search(store,{force=false,query='',source_id='',trigger='m
       let status='success',discovered=0,added=0,duplicates=0,rejected=0,details={warnings:[],reasons:{}};
       try{
         const result=await adapter(s,cfg,{query});details.warnings=result.warnings||[];if(result.manual)status='manual';else if(result.unconfigured)status='unconfigured';else {checked++;if(result.limited||details.warnings.length)status='partial'}
-        details.limited=!!result.limited;discovered=result.jobs.length;
+        details.limited=!!result.limited;details.scanned=result.scanned??result.jobs.length;details.scope_filtered=result.scope_filtered||0;discovered=result.jobs.length;
         for(const raw of result.jobs){try{
           const r=store.ingest(raw,runId);if(r.isNew)added++;else duplicates++;
           if(r.job.assessment.category==='Filtered'){rejected++;for(const reason of r.job.assessment.barriers)details.reasons[reason]=(details.reasons[reason]||0)+1;}
-          else if(r.job.workplace&&r.job.assessment.matched.length>=3&&!r.job.commute){const commute=await route(store,r.job);store.updateJob(r.id,{commute});}
+          else if(r.job.workplace&&r.job.assessment.matched.length>=2&&(!r.job.commute||r.job.commute.expires_at&&r.job.commute.expires_at<now()||r.job.commute.minutes==null&&(!r.job.commute.checked_at||Date.now()-new Date(r.job.commute.checked_at)>3600000))){const commute=await route(store,r.job);store.updateJob(r.id,{commute});}
         }catch(e){details.warnings.push(`Advert skipped: ${e.message}`);status='partial'}}
-        if(discovered===0&&details.warnings.length&&!result.manual&&!result.unconfigured){status='failed';failed++;checked--;}
+        if(discovered===0&&!result.scanned&&details.warnings.length&&!result.manual&&!result.unconfigured){status='failed';failed++;checked--;}
         newJobs+=added;
       }catch(e){status='failed';failed++;details.warnings.push(e.message)}
       const at=now();const health={status,at,discovered,new_jobs:added,duplicates,rejected,...details};

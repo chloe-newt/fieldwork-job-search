@@ -7,7 +7,7 @@ import {Store} from '../src/store.mjs';
 import {assess as assessEngine,extractRequirements,classifyFamily} from '../src/engine.mjs';
 import {route} from '../src/commute.mjs';
 import {normalizeJob,canonical,dateOnly,londonDate} from '../src/util.mjs';
-import {structuredJobs,parseNHS} from '../src/sources.mjs';
+import {structuredJobs,parseNHS,nhsSearchURL,fetchSource} from '../src/sources.mjs';
 import {robotsAllowed,isPrivate} from '../src/network.mjs';
 import {search,tick} from '../src/search.mjs';
 // Synthetic profile for rule tests; not a real person's qualifications or location.
@@ -34,8 +34,51 @@ test('mandatory experience blocks junior titles; desirable experience does not',
   const a=assess(job({description:full+'\nDesirable\n5 years of experience preferred.'}));assert.notEqual(a.category,'Filtered');assert.match(a.issues.join(),/preferred/);
 });
 test('word-number experience requirements are recognised',()=>assert.equal(assess(job({description:full+'\nEssential\nThree years of industry experience required.'})).category,'Filtered'));
-test('senior titles, professional credentials and unrelated childcare are filtered',()=>{
-  for(const extra of [{title:'Senior Bioinformatics Scientist'},{title:'Nursery Teacher'},{description:full+'\nEssential\nHCPC registration required.'},{description:full+'\nEssential\nPhD in biology required.'}])assert.equal(assess(job(extra)).category,'Filtered');
+test('confirmed professional credentials and unrelated childcare are filtered',()=>{
+  for(const extra of [{title:'Nursery Teacher'},{description:full+'\nEssential\nHCPC registration required.'},{description:full+'\nEssential\nPhD in biology required.'}])assert.equal(assess(job(extra)).category,'Filtered');
+});
+
+test('senior wording alone remains in Explore; actual excessive experience still filters',()=>{
+  const a=assess(job({title:'Senior Bioinformatics Scientist'}));assert.equal(a.category,'Explore');assert.equal(a.gates.early_career,false);
+  assert.equal(assess(job({title:'Senior Bioinformatics Scientist',description:full+'\nEssential\n5 years of industry experience required.'})).category,'Filtered');
+});
+
+test('publisher requirements override boilerplate guesses without discarding real essential criteria',()=>{
+  const a=assess(job({description:full+'\nEssential\nThe organisation is required by law to check sponsorship.\nEmployer details\nNurses require GMC registration.',requirements:{essential:['BSc in biology','Python and statistics skills'],desirable:['R experience preferred']}}));assert.equal(a.category,'Complete Hit');assert.equal(a.requirements.essential.length,2);
+  assert.equal(assess(job({requirements:{essential:['PhD in biology required','Python and statistics skills'],desirable:[]}})).category,'Filtered');
+});
+
+test('SQL, dashboards and data QA are recognised only when supplied in the profile',()=>{
+  const j=job({description:full+'\nEssential\nSQL skills required for data quality and dashboards.'});
+  assert.equal(assess(j).gates.requirements,false);
+  const a=assess(j,{skills:[...TEST_PROFILE.skills,'sql','dashboards','data quality']});assert.equal(a.gates.requirements,true);assert(a.matched.includes('sql'));assert(a.matched.includes('data quality'));
+});
+
+test('Python can satisfy an explicit SQL or Python alternative',()=>{
+  const a=assess(job({description:full+'\nEssential\nBasic understanding of SQL or Python required.'}));assert.equal(a.gates.requirements,true);assert(!a.issues.some(x=>x.includes('not confirmed')&&x.includes('SQL')));
+});
+
+test('research and development does not imply the R programming language',()=>{
+  const a=assess(job({description:full+'\nEssential\nPython experience in an R&D team.'}));assert(!a.issues.some(x=>x==='Essential skill not confirmed in your profile: R'));
+});
+
+test('a confirmed excessive commute is not hidden inside the conditional local shortlist',()=>{
+  const a=assess(job({remote_uk:false,commute:{origin:TEST_PROFILE.origin_routing,destination:'Test workplace',minutes:64,expires_at:'2099-01-01'}}));assert.equal(a.category,'Explore');assert.equal(a.gates.location,false);
+});
+
+test('an unconfirmed MSc is conditional and never silently treated as awarded',()=>{
+  const a=assess(job({description:full+'\nEssential\nMSc in biology required.'}),{pending_qualifications:['msc']});assert.equal(a.category,'Conditional Match');assert.equal(a.gates.requirements,false);assert.match(a.issues.join(),/award is pending/);
+});
+
+test('plausible roles with missing evidence stay visible without passing complete gates',()=>{
+  const a=assess(job({remote_uk:false,requirements:{essential:[],desirable:[]}}));assert.equal(a.category,'Conditional Match');assert.equal(a.gates.location,false);assert.equal(a.gates.requirements,false);
+  assert.equal(assess(job(),{exclude_employers:['Example Research Institute']}).category,'Filtered');
+});
+
+test('NHS scan reaches later pages with country, sorting and page-size parameters',async()=>{
+  const url=new URL(nhsSearchURL({},'analyst',2));assert.equal(url.searchParams.get('limit'),'100');assert.equal(url.searchParams.get('sort'),'publicationDateDesc');assert.equal(url.searchParams.get('countryCode'),'GB-ENG');
+  const requested=[];const request=async raw=>{requested.push(raw);if(!raw.includes('search_xml'))return '<p id="job_overview">A graduate analyst role</p><li id="essential_a">SQL skills</li>';const p=+new URL(raw).searchParams.get('page');return `<nhsJobs><totalPages>4</totalPages><totalResults>301</totalResults>${p===4?'<vacancyDetails><title>Graduate Data Analyst</title><employer>Example</employer><url>https://www.jobs.nhs.uk/candidate/jobadvert/test</url></vacancyDetails>':''}</nhsJobs>`};
+  const r=await fetchSource({type:'nhs',name:'Test NHS',query:'analyst'},TEST_PROFILE,{request});assert.equal(r.jobs.length,1);assert(requested.some(u=>u.includes('page=4')));assert.equal(r.limited,false);
 });
 test('masters is not inferred from postgraduate training',()=>assert.equal(assess(job({description:full+'\nEssential\nMSc in biology required.'})).category,'Filtered'));
 test('desirable PhD does not become a qualification barrier',()=>assert.notEqual(assess(job({description:full+'\nDesirable\nPhD in biology preferred.'})).category,'Filtered'));

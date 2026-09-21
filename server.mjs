@@ -59,7 +59,7 @@ if(args.includes('--backup')){
         for(const k of ['origin','origin_routing','include_keywords','exclude_keywords','profile_summary'])if(k in b)out[k]=String(b[k]).slice(0,5000);
         for(const k of ['brave_key','tfl_key'])if(k in b&&b[k]!=='configured')out[k]=String(b[k]).trim().slice(0,500);
         for(const k of ['auto_search','catch_up','routing_enabled'])if(k in b)out[k]=!!b[k];
-        for(const k of ['skills','qualifications','certifications'])if(k in b){if(!Array.isArray(b[k])||b[k].length>100)throw Error(`Invalid ${k}`);out[k]=b[k].map(v=>String(v).trim().toLowerCase()).filter(Boolean);}
+        for(const k of ['skills','qualifications','pending_qualifications','certifications','exclude_employers'])if(k in b){if(!Array.isArray(b[k])||b[k].length>100)throw Error(`Invalid ${k}`);out[k]=b[k].map(v=>String(v).trim().toLowerCase()).filter(Boolean);}
         store.saveSettings(out);store.reassess();send(res,200,{ok:true});return;
       }
       if(p==='/api/sources'&&req.method==='POST'){

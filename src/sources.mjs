@@ -23,6 +23,7 @@ export function structuredJobs(page,url){
 export function parseNHS(xml){if(!/<nhsJobs\b/.test(xml))throw Error('NHS XML schema changed');return {pages:+tag(xml,'totalPages'),total:+tag(xml,'totalResults'),jobs:[...xml.matchAll(/<vacancyDetails>([\s\S]*?)<\/vacancyDetails>/g)].map(([,b])=>({
   title:tag(b,'title'),employer:tag(b,'employer'),description:tag(b,'description'),closing_date:tag(b,'closeDate'),posting_date:tag(b,'postDate'),salary:tag(b,'salary'),contract_type:tag(b,'type'),reference:tag(b,'reference'),location:tags(b,'location').join(' / '),url:tag(b,'url').replace('beta.jobs.nhs.uk','www.jobs.nhs.uk'),verified_open:true,direct:true
 }))}}
+export function nhsSearchURL(source,query,page){return 'https://www.jobs.nhs.uk/api/v1/search_xml?'+new URLSearchParams({keyword:query,location:source.location||'London',countryCode:'GB-ENG',distance:'20',limit:'100',externalOnly:'true',page:String(page),sort:'publicationDateDesc',...(source.employer_code?{employerCode:source.employer_code}:{})})}
 export function nhsDetails(page){
   const essential=[...page.matchAll(/<li[^>]*id="essential_[^"]+"[^>]*>([\s\S]*?)<\/li>/gi)].map(m=>text(m[1]));
   const desirable=[...page.matchAll(/<li[^>]*id="desirable_[^"]+"[^>]*>([\s\S]*?)<\/li>/gi)].map(m=>text(m[1]));
@@ -31,14 +32,21 @@ export function nhsDetails(page){
   return {description:content,requirements:{essential:[...new Set(essential)],desirable:[...new Set(desirable)]},workplace:element(page,'employer_postcode'),closing_date:element(page,'closing_date').replace(/Closing date:\s*/i,''),posting_date:element(page,'date_posted')};
 }
 export async function importURL(url){const page=await html(url);if(/jobs\.nhs\.uk/.test(new URL(url).hostname)){
-    const d=nhsDetails(page);return {title:text(page.match(/<h1[^>]*>([\s\S]*?)<\/h1>/)?.[1]),employer:element(page,'employer_name'),location:[element(page,'employer_town'),element(page,'employer_postcode')].filter(Boolean).join(', '),salary:element(page,'range_salary'),url,source:'NHS Jobs',credible:true,verified_open:!!page.match(/id="apply"/),direct:true,...d};
+    const d=nhsDetails(page);return {title:text(page.match(/<h1[^>]*>([\s\S]*?)<\/h1>/)?.[1]),employer:element(page,'employer_name'),location:[element(page,'employer_town'),element(page,'employer_postcode')].filter(Boolean).join(', '),salary:element(page,'range_salary'),url,source:'NHS Jobs',credible:true,verified_open:!!page.match(/id="apply(?:-ats-direct)?"/),direct:true,...d};
   }
-  const jobs=structuredJobs(page,url);if(!jobs.length)throw Error('No structured JobPosting found. Paste the full advert instead.');return {...jobs[0],source:new URL(url).hostname};
+  const jobs=structuredJobs(page,url);if(!jobs.length)throw Error('No structured JobPosting found. Paste the full advert instead.');
+  if(new URL(url).hostname==='www.kcl.ac.uk'){
+    const main=page.match(/<main\b[^>]*>([\s\S]*?)<\/main>/i)?.[1];
+    if(main)jobs[0].description=text(main);
+    jobs[0].verified_open=/data-test-id="apply-button-main"/.test(page);
+    jobs[0].employer="King's College London";jobs[0].credible=true;jobs[0].direct=true;
+  }
+  return {...jobs[0],source:new URL(url).hostname};
 }
 const relevantTitle=t=>/research|science|scientist|analyst|data|bioinformatic|regulat|plant|crop|agricultur|environment|ecolog|laboratory|technician|evidence|statistic|machine learning|software|clinical/i.test(t);
-export async function fetchSource(source,settings,{query=''}={}){
-  const jobs=[],warnings=[];let limited=false;const q=query||source.query||'';
-  const push=j=>jobs.push(normalizeJob({...j,source:source.name,employer_type:source.employer_type||'Unknown',credible:!!source.credible}));
+export async function fetchSource(source,settings,{query='',request=get,readPage=html}={}){
+  const jobs=[],warnings=[];let limited=false,scanned=0,scopeFiltered=0;const q=query||source.query||'';
+  const push=j=>{scanned++;const overseas=/\b(?:United States|USA|Canada|Germany|Switzerland|France|Australia|India|China|Netherlands|Ireland|Spain|Portugal|Italy|Poland|Japan|Singapore|New York|California|Boston|Toronto|Berlin|Dublin)\b/i.test(j.location||'')&&!/\b(?:UK|United Kingdom|London)\b/i.test(j.location||'');if(!relevantTitle(j.title)||overseas&&!j.remote_uk){scopeFiltered++;return}jobs.push(normalizeJob({...j,source:source.name,employer_type:source.employer_type||'Unknown',credible:!!source.credible}))};
   if(source.type==='manual')return {jobs,warnings:[source.note||'Manual source — open in browser and import advert'],manual:true};
   if(source.type==='greenhouse'){
     const data=await get(`https://boards-api.greenhouse.io/v1/boards/${encodeURIComponent(source.board)}/jobs?content=true`,{json:true});if(!Array.isArray(data.jobs))throw Error('Unexpected Greenhouse schema');
@@ -57,18 +65,26 @@ export async function fetchSource(source,settings,{query=''}={}){
       if(offset+100>=d.totalFound)break;offset+=100;if(page===2)limited=true;
     }
   }else if(source.type==='nhs'){
-    for(let page=1;page<=3;page++){
-      const params=new URLSearchParams({keyword:q,location:'London',distance:'20',externalOnly:'true',page:String(page),sort:'publicationDateDesc',...(source.employer_code?{employerCode:source.employer_code}:{})});
-      const data=parseNHS(await get('https://www.jobs.nhs.uk/api/v1/search_xml?'+params));
-      for(const j of data.jobs){if(relevantTitle(j.title))try{Object.assign(j,Object.fromEntries(Object.entries(nhsDetails(await get(j.url))).filter(([,v])=>v!=='')))}catch(e){warnings.push(`${j.title}: full requirements unavailable (${e.message})`)}push(j)}
-      if(page>=data.pages)break;if(page===3)limited=true;
+    const maxPages=Math.min(20,Math.max(1,source.max_pages||10)),feedJobs=[];let details=0;
+    for(let page=1;page<=maxPages;page++){
+      const data=parseNHS(await request(nhsSearchURL(source,q,page)));
+      feedJobs.push(...data.jobs);
+      if(page>=data.pages)break;if(page===maxPages)limited=true;
     }
+    const terms=q.toLowerCase().match(/[a-z]+/g)||[];
+    const priority=j=>terms.reduce((n,w)=>n+(j.title.toLowerCase().includes(w)?5:0),0)+(/graduate|junior|research assistant|trainee/i.test(j.title)?3:0)-(/nurse|midwi|clinical fellow|consultant|senior|principal|head of/i.test(j.title)?5:0);
+    feedJobs.sort((a,b)=>priority(b)-priority(a));
+    for(const j of feedJobs){if(relevantTitle(j.title)){
+      if(details<60){details++;try{Object.assign(j,Object.fromEntries(Object.entries(nhsDetails(await request(j.url))).filter(([,v])=>v!=='')))}catch(e){warnings.push(`${j.title}: full requirements unavailable (${e.message})`)}}
+      else limited=true;
+    }push(j)}
+    if(limited)warnings.push(`Bounded NHS scan: up to ${maxPages*100} feed records and 60 full adverts per query. Title-relevant results are prioritised for full details.`);
   }else if(source.type==='academic'){
-    const url='https://www.jobs.ac.uk/search/?'+new URLSearchParams({keywords:q,sortOrder:'1',pageSize:'25'});
-    const page=await html(url), links=[...new Set([...page.matchAll(/href="(\/job\/[^"#]+)"/g)].map(m=>'https://www.jobs.ac.uk'+m[1]))];
+    const url='https://www.jobs.ac.uk/search/?'+new URLSearchParams({keywords:q,sortOrder:'1',pageSize:'25',...(source.location?{location:source.location}:{})});
+    const page=await readPage(url), links=[...new Set([...page.matchAll(/href="(\/job\/[^"#]+)"/g)].map(m=>'https://www.jobs.ac.uk'+m[1]))];
     if(!links.length&&!/no (?:jobs|results)|0 jobs|no matching/i.test(page))throw Error('No vacancy links recognised; source layout may have changed');
-    for(const link of links.slice(0,15))try{const detail=await html(link), parsed=structuredJobs(detail,link);if(!parsed.length)throw Error('JobPosting metadata missing');for(const j of parsed){j.url=link;push(j)}}catch(e){warnings.push(`${link}: ${e.message}`)}
-    limited=links.length>15||/next page|rel="next"/i.test(page);
+    for(const link of links.slice(0,25))try{const detail=await readPage(link), parsed=structuredJobs(detail,link);if(!parsed.length)throw Error('JobPosting metadata missing');for(const j of parsed){j.url=link;push(j)}}catch(e){warnings.push(`${link}: ${e.message}`)}
+    limited=links.length>25||/next page|rel="next"/i.test(page);
   }else if(source.type==='rss'){
     const xml=await get(source.url);if(!/<rss|<feed/i.test(xml))throw Error('Not an RSS / Atom feed');
     for(const m of xml.matchAll(/<(?:item|entry)\b[^>]*>([\s\S]*?)<\/(?:item|entry)>/gi)){
@@ -86,5 +102,5 @@ export async function fetchSource(source,settings,{query=''}={}){
     }
   }else throw Error('Unsupported source type');
   if(query&&!['nhs','academic','brave'].includes(source.type)){const words=query.toLowerCase().split(/\s+/);return {jobs:jobs.filter(j=>words.every(w=>(j.title+' '+j.description).toLowerCase().includes(w))),warnings,limited};}
-  return {jobs,warnings,limited};
+  return {jobs,warnings,limited,scanned,scope_filtered:scopeFiltered};
 }
