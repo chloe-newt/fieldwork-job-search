@@ -1,7 +1,7 @@
 import { DatabaseSync, backup } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
-import { DEFAULTS, SOURCES } from './defaults.mjs';
+import { DEFAULTS, SOURCES, RETIRED_SOURCES } from './defaults.mjs';
 import { now,londonDate,normal,canonical,similarity,normalizeJob,dateOnly } from './util.mjs';
 import { assess } from './engine.mjs';
 export const STATUSES=['Interested','Preparing','Applied','Interview','Assessment','Offer','Rejected','Withdrawn'];
@@ -21,9 +21,15 @@ export class Store {
       CREATE TABLE IF NOT EXISTS source_logs (id INTEGER PRIMARY KEY,run_id INTEGER REFERENCES runs(id),source_id TEXT,at TEXT,status TEXT,discovered INTEGER,new_jobs INTEGER,duplicates INTEGER,rejected INTEGER,details TEXT);
       CREATE TABLE IF NOT EXISTS commute_cache (key TEXT PRIMARY KEY,data TEXT NOT NULL,expires_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS leases (name TEXT PRIMARY KEY,owner TEXT,expires_at TEXT);
-      PRAGMA user_version=1;`);
+      `);
+    const version=this.db.prepare('PRAGMA user_version').get().user_version;
     this.db.prepare('INSERT OR IGNORE INTO settings VALUES (1,?)').run(JSON.stringify(DEFAULTS));
     const ins=this.db.prepare('INSERT OR IGNORE INTO sources(id,config,next_due) VALUES(?,?,?)');for(const s of SOURCES)ins.run(s.id,JSON.stringify(s),now());
+    // v2: retire noisy broad-tech defaults on existing installs. They are
+    // disabled, not deleted, so history and any manual re-enable survive.
+    if(version<2){const get=this.db.prepare('SELECT config FROM sources WHERE id=?'),put=this.db.prepare('UPDATE sources SET config=? WHERE id=?');
+      for(const id of RETIRED_SOURCES){const row=get.get(id);if(row){const c=JSON.parse(row.config);c.enabled=false;c.retired_note='Disabled by default in v1.1: mostly unrelated roles. Re-enable in Source Health if wanted.';put.run(JSON.stringify(c),id)}}}
+    if(version<2)this.db.exec('PRAGMA user_version=2');
   }
   settings(){return {...DEFAULTS,...JSON.parse(this.db.prepare('SELECT value FROM settings WHERE id=1').get().value)}}
   saveSettings(delta){const v={...this.settings(),...delta};this.db.prepare('UPDATE settings SET value=? WHERE id=1').run(JSON.stringify(v));return v}
@@ -57,7 +63,7 @@ export class Store {
       if(existing){
         id=existing.id;const old=JSON.parse(existing.data), prefer=j.direct&&!old.direct;
         const merged={...old,...Object.fromEntries(Object.entries(j).filter(([k,v])=>v!==''&&v!==null&&v!==undefined&&!(k==='description'&&v.length<old.description?.length))),url:prefer?j.url:old.url,
-          review:old.review,commute:old.commute,workplace:old.workplace||j.workplace,nearest_station:old.nearest_station||j.nearest_station,credible:old.credible||j.credible};
+          review:old.review,commute:old.commute,workplace:old.workplace||j.workplace,workplace_note:old.workplace?old.workplace_note||'':j.workplace_note||'',nearest_station:old.nearest_station||j.nearest_station,credible:old.credible||j.credible};
         merged.assessment=assess(merged,this.settings());
         this.db.prepare('UPDATE jobs SET url=?,data=?,last_seen=? WHERE id=?').run(merged.url,JSON.stringify(merged),now(),id);
       }else{
@@ -71,6 +77,7 @@ export class Store {
     const fields=['saved','hidden','archived','archive_exempt'];for(const k of fields)if(k in delta)this.db.prepare(`UPDATE jobs SET ${k}=? WHERE id=?`).run(delta[k]?1:0,id);
     if(delta.archived===false)this.db.prepare("UPDATE jobs SET archive_reason='',archive_exempt=1 WHERE id=?").run(id);
     const data=JSON.parse(row.data);for(const k of ['workplace','nearest_station','commute','review','credible','verified_open','closing_date','office_days','work_pattern','remote_uk','salary','grade'])if(k in delta)data[k]=delta[k];
+    if('workplace' in delta&&delta.workplace!==JSON.parse(row.data).workplace)data.workplace_note='Entered by you';
     if(delta.verified_open)data.fetched_at=now();data.assessment=assess(data,this.settings());
     this.db.prepare('UPDATE jobs SET data=? WHERE id=?').run(JSON.stringify(data),id);return this.job(id);
   }

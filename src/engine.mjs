@@ -7,12 +7,34 @@ const signals = {
  'data quality':/\bdata (?:quality|cleaning|validation)|quality.assur(?:e|ing|ance).{0,20}data/i,
  'data integration':/\bdata integration|integrat(?:e|ing|ion).{0,30}data|link(?:ing|ed).{0,20}datasets/i,
  dashboards:/\bdashboards?\b|\bshiny\b/i,automation:/\bautomat(?:e|ed|ion)|reproducible (?:workflows?|pipelines?)/i,
- 'data analysis':/\bdata (?:analysis|analytics|analyst)\b/i,visualisation:/\bvisuali[sz]ation\b/i,
+ 'data analysis':/\bdata (?:analysis|analytics|analyst|management(?:,| and) analysis)\b|\banaly[sz](?:e|es|ing|is) (?:of )?(?:the |complex |large |research )*(?:data|datasets)\b/i,visualisation:/\bvisuali[sz]ation\b/i,
  'machine learning':/\bmachine learning|\bML\b/,bioinformatics:/\bbioinformatic/i,'computational biology':/\bcomputational biolog/i,
  biology:/\bbiolog(?:y|ical)|life science|biomedical/i,neuroscience:/\bneuro(?:science|scientific)/i,
  research:/\bresearch\b/i,laboratory:/\blaboratory|\blab\b/i,proteomics:/\bproteomic/i,
- 'mass spectrometry':/\bmass spectrometr/i,databases:/\bdatabases?\b/i,'scientific computing':/\bscientific (?:computing|programming)|computational workflow/i
+ 'mass spectrometry':/\bmass spectrometr/i,databases:/\bdatabases?\b/i,'scientific computing':/\bscientific (?:computing|programming)|computational workflow/i,
+ r:/(?:^|[\s,(/])R(?=[\s,)/.]|$)(?!\s*&\s*D)/
 };
+export const SIGNAL_KEYS=Object.keys(signals);
+// Free-text skills typed in Settings are mapped onto the engine's recognised
+// signals, so "Pandas/NumPy", "SQL (DuckDB)" or "Data visualization" still count.
+const ALIASES=[
+ [/^python\b|\bpython\s*3/,'python'],[/pandas/,'pandas'],[/numpy/,'numpy'],[/\bsql\b|postgres|mysql|sqlite/,'sql'],[/duckdb/,'duckdb'],
+ [/\bgit(?:hub|lab)?\b|version control/,'git'],[/linux|\bwsl\b|bash|shell/,'linux'],[/statistic|biostatistic/,'statistics'],
+ [/data quality|quality assur|data cleaning|data validation/,'data quality'],[/data integration|data linkage|linking datasets/,'data integration'],
+ [/dashboard|shiny|plotly dash|power bi|tableau/,'dashboards'],[/automat|reproducib|pipeline|workflow/,'automation'],
+ [/data analy/,'data analysis'],[/visuali[sz]/,'visualisation'],[/machine learning|\bml\b|deep learning|scikit|pytorch|tensorflow/,'machine learning'],
+ [/bioinformatic/,'bioinformatics'],[/computational biolog/,'computational biology'],[/^biology|biological|life science|biomedical/,'biology'],
+ [/neuroscien/,'neuroscience'],[/^research|research project|scientific research/,'research'],[/laborator|wet lab|\blab\b/,'laboratory'],
+ [/proteomic/,'proteomics'],[/mass spec/,'mass spectrometry'],[/database/,'databases'],[/scientific (?:computing|programming)|hpc|high.performance/,'scientific computing'],
+ [/^r$|^r (?:programming|language)|\brstudio\b|tidyverse/,'r']
+];
+export function normaliseSkills(list=[]){
+  const known=new Set(),unrecognised=[];
+  for(const raw of list){const v=String(raw).trim().toLowerCase();if(!v)continue;
+    if(SIGNAL_KEYS.includes(v)){known.add(v);continue}
+    const hits=ALIASES.filter(([re])=>re.test(v)).map(([,k])=>k);hits.forEach(k=>known.add(k));if(!hits.length)unrecognised.push(raw);}
+  return {skills:[...known],unrecognised};
+}
 const familyRules = [
  ['Child & population research',/child(?:ren)?(?:'s)? (?:health|development|data|research|services|aged)|childhood|child-development|adolescent|paediatric|pediatric|youth outcomes|education statistics|developmental neuro/i,/data|statistic|research|evidence|epidemiolog|analys/i],
  ['Plant & agriculture',/\b(?:plant (?:science|biolog|health|patholog|genom)|crops?\b|agricultur|agri[- ]|horticultur|phytopath|pesticid|entomolog|food systems|pest\b|biosecurity|invasive species)/i],
@@ -45,7 +67,7 @@ function yearsIn(s){
   return [...named.matchAll(/\b(\d{1,2})(?:\s*[-–]\s*\d{1,2})?\s*\+?\s*years?(?:['’])?(?:\s+of)?\s+(?:\w+\s+){0,4}experience/gi)].map(m=>+m[1]);
 }
 export function assess(job, config={}, at=new Date()) {
-  const cfg={...DEFAULTS,...config}, title=job.title||'', desc=job.description||'', all=title+'\n'+desc;
+  const base={...DEFAULTS,...config},cfg={...base,skills:normaliseSkills(base.skills).skills}, title=job.title||'', desc=job.description||'', all=title+'\n'+desc;
   const req=extractRequirements(job), positive=[], issues=[], barriers=[], gates={};
   if(cfg.exclude_employers.some(name=>normal(name)===normal(job.employer)))barriers.push('Employer excluded in your saved preferences');
   const matched=Object.entries(signals).filter(([key,re])=>cfg.skills.includes(key)&&re.test(all)).map(([k])=>k);
@@ -54,6 +76,9 @@ export function assess(job, config={}, at=new Date()) {
   const roleRelevant=/analyst|analytical|scientist|science|research|bioinformatic|biolog|statistic|data|evidence|regulat|laboratory|technician|ecolog|environment|plant|crop|agricultur|biosecurity|machine learning|software|programmer/i.test(title);
   const genericCare=/nursery|care assistant|support worker|social worker|teacher|teaching assistant|youth worker|childcare/i.test(title)&&!/research|data|analyst|statistic/i.test(title);
   if(!roleRelevant||family==='Other'||genericCare)barriers.push('Role is outside the scientific, analytical or research focus');
+  const wetLabTitle=/\b(?:laboratory|lab) (?:technician|scientist|assistant|analyst|manager)|biomedical scientist|healthcare scientist|cell culture|molecular biologist|research technician|animal technician|phlebotom/i.test(title)&&!/bioinformatic|computational|data|software|informatics|analyst \(data/i.test(title);
+  const wetLabDuties=(desc.match(/\b(?:pipett|cell culture|tissue culture|western blot|PCR\b|qPCR|cloning|bench(?:-| )?work|wet[- ]lab|laboratory[- ]based|animal handling|microscop|ELISA|sample (?:processing|preparation))/gi)||[]).length;
+  if(cfg.avoid_wet_lab&&(wetLabTitle||wetLabDuties>=4&&!/bioinformatic|computational|data scien|analys(?:e|is) of (?:large|complex)|python/i.test(title+' '+desc.slice(0,1500))))barriers.push('Primarily wet-lab / bench work, which you have excluded in Settings');
   if(/account executive|sales (?:representative|manager|director)|business development|recruitment consultant|talent partner|recruiter|customer success manager/i.test(title))barriers.push('Commercial, recruitment or sales role rather than a scientific / analytical role');
   const senior=/\b(senior|principal|director|head of|professor|postdoc(?:toral)?|post-doctoral|consultant physician|staff scientist|lead)\b/i.test(title);
   if(/\b(director|head of|professor|postdoc(?:toral)?|post-doctoral|consultant physician)\b/i.test(title))barriers.push('Role indicates executive, doctoral or clinical-professional expertise');
@@ -89,12 +114,15 @@ export function assess(job, config={}, at=new Date()) {
     const alternativeSatisfied=line=>[...line.matchAll(/\b(?:SQL|Python|SAS|R|Java)(?:\s*,\s*(?:SQL|Python|SAS|R|Java))*\s*(?:,\s*)?\bor\s+(?:SQL|Python|SAS|R|Java)\b/gi)].some(m=>new RegExp('\\b'+escaped+'\\b','i').test(m[0])&&cfg.skills.some(k=>new RegExp('\\b'+k.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'\\b','i').test(m[0])));
     if(essential.some(line=>pattern.test(line)&&!alternativeSatisfied(line))&&!cfg.skills.some(x=>x.toLowerCase()===skill.toLowerCase()))missingTechnical.push(skill);
   }
-  if(/\bR\b(?!\s*&\s*D)/.test(hard)&&!cfg.skills.includes('r'))missingTechnical.push('R');
+  const rLines=essential.filter(line=>/\bR\b(?!\s*&\s*D)/.test(line));
+  if(rLines.length&&!cfg.skills.includes('r')&&!rLines.every(line=>/\b(?:Python|SQL|SAS|Stata|MATLAB|Julia)\b[^.]{0,20}\bor\s+R\b|\bR\b\s*(?:,|or)\s*(?:[A-Za-z]+\s*,\s*)*(?:or\s+)?(?:Python|SQL|SAS|Stata)\b/.test(line)&&cfg.skills.some(k=>['python','sql'].includes(k))))missingTechnical.push('R');
   missingTechnical.forEach(k=>issues.push(`Essential skill not confirmed in your profile: ${k}`));
   const uncovered=essential.filter(s=>s.length>180&&/experience with|experience (?:of|in)|expertise|proficien/i.test(s)||/ph\.?d|doctorate/i.test(s)&&/or equivalent|working towards/i.test(s)||/experience|knowledge|proficien|expert|certif|degree|qualification|skills|registration/i.test(s)&&
     !Object.values(signals).some(re=>re.test(s))&&!/communication|teamwork|collaborat|organis|problem.solv|attention to detail|bsc|bachelor|life science/i.test(s));
   if(uncovered.length)issues.push(`${uncovered.length} essential criterion/criteria need your review`);
-  const earlyWording=/\b(?:graduate|junior|entry[- ]level|trainee|research assistant|assistant analyst)\b/i.test(title)||/recent (?:university )?graduates?|no (?:prior |previous |professional )?experience (?:is )?(?:required|necessary)|0\s*[-–]\s*2\s*years/i.test(desc);
+  const csEntryGrade=/^(?:AO|EO|HEO)$/.test(job.grade||'')||/\b(?:Executive Officer|Higher Executive Officer)\b/.test(desc.slice(0,3000))&&!/\bSenior Executive Officer\b/.test(desc.slice(0,3000));
+  if(csEntryGrade)positive.push('Civil Service AO/EO/HEO grade, usually open to graduates');
+  const earlyWording=csEntryGrade||/\b(?:graduate|junior|entry[- ]level|trainee|research assistant|assistant analyst)\b/i.test(title)||/recent (?:university )?graduates?|no (?:prior |previous |professional )?experience (?:is )?(?:required|necessary)|0\s*[-–]\s*2\s*years/i.test(desc);
   const early=earlyWording||(mandatoryYears>0&&mandatoryYears<=cfg.max_experience)||!!job.review?.early_career;
   if(early)positive.push('Evidence of early-career accessibility');else issues.push('Early-career accessibility needs confirmation');
   const restricted=/\b(?:United States|USA|Canada|Germany|Switzerland|France|Australia|India|China|Netherlands|Ireland|Spain|Portugal|Italy|Poland|Japan|Korea|Singapore|New York|California|Massachusetts|Ohio|New Jersey|Texas|Boston|Toronto|Barcelona|Madrid|Lisbon|Paris|Berlin|Dublin)\b/i.test(job.location||'')&&!/\b(?:UK|United Kingdom|London)\b/i.test(job.location||'');
@@ -135,8 +163,13 @@ export function assess(job, config={}, at=new Date()) {
   let score=Math.min(80,matched.length*7+(early?10:0)+(eligible?8:0));
   const preference=Math.max(-10,Math.min(10,(cfg.weights?.[family]||0)+matched.reduce((n,k)=>n+(cfg.weights?.[k]||0),0)));
   score=Math.max(0,Math.min(100,score+preference-barriers.length*25-(early?0:12)-(outsideLondon?18:0)-(unspecifiedYears>cfg.max_experience?22:0)-Math.min(15,uncovered.length*3)));
+  // Strong Match no longer needs every essential criterion machine-verified: a
+  // couple of unrecognised criteria or one missing optional-looking tool is
+  // shown as an issue instead of silently demoting a realistic role.
+  const requirementsPlausible=gates.requirements||barriers.length===0&&!qualificationUnconfirmed&&unspecifiedYears<=cfg.max_experience&&essential.length>=1&&uncovered.length<=2&&missingTechnical.length<=1&&desc.length>=250;
+  const localEnough=eligible||(!validCommute&&/\bLondon\b/i.test(job.location||''));
   let category=Object.values(gates).every(Boolean)?'Complete Hit':
-    barriers.length===0&&strongOverlap&&gates.early_career&&salaryOK&&(eligible||(/London/i.test(job.location)&&!validCommute))&&gates.requirements?'Strong Match':'Explore';
+    barriers.length===0&&strongOverlap&&gates.early_career&&salaryOK&&localEnough&&requirementsPlausible?'Strong Match':'Explore';
   if(borderline&&strongOverlap&&barriers.length===0)category='Borderline';
   const plausibleOverlap=matched.length>=2&&(methods.length>0||matched.includes('research')&&matched.includes('biology'));
   const unresolvedLocal=job.remote_uk||(validCommute?commute.minutes<=cfg.commute_limit:/\bLondon\b/i.test(job.location));
@@ -146,5 +179,5 @@ export function assess(job, config={}, at=new Date()) {
   if(excludes.some(k=>all.toLowerCase().includes(k))){barriers.push('Matches a globally excluded keyword');category='Filtered';}
   const includes=cfg.include_keywords.split(',').map(x=>x.trim().toLowerCase()).filter(Boolean);
   if(includes.length&&!includes.some(k=>all.toLowerCase().includes(k))){issues.push('Does not match your global include keywords');if(category!=='Filtered')category='Explore';}
-  return {category,score,family,early_career:early,matched,positive,issues:[...new Set(issues)].slice(0,15),barriers:[...new Set(barriers)],gates,requirements:req,unreviewed_requirements:uncovered,preference,engine_version:2};
+  return {category,score,family,early_career:early,matched,positive,issues:[...new Set(issues)].slice(0,15),barriers:[...new Set(barriers)],gates,requirements:req,unreviewed_requirements:uncovered,preference,engine_version:3};
 }
