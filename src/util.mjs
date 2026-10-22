@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { inferWorkplace } from './places.mjs';
 export const now = () => new Date().toISOString();
 export const londonDate = (d = new Date()) => new Intl.DateTimeFormat('en-CA', {timeZone:'Europe/London', year:'numeric',month:'2-digit',day:'2-digit'}).format(d);
 export function dateOnly(s) {
@@ -47,9 +48,10 @@ export function normalizeJob(j) {
   let remote_uk=j.remote_uk??(work_pattern==='Remote'&&/\b(?:UK|United Kingdom|Britain|London)\b/i.test(location));
   const remote_restricted=/must (?:live|reside|be based)|maximum commuting distance|required (?:office|on.site)|required to (?:attend|work from) (?:the )?office/i.test(description);
   if(remote_restricted)remote_uk=false;
+  const inferred=j.workplace?null:inferWorkplace({location,title,employer:text(j.employer||''),description});
   const office=description.match(/(\d)\s*days?\s*(?:per |a |each )?week.{0,30}(?:office|on[- ]site)/i);
   return {...j,title,employer:text(j.employer||'Employer unverified'),description,location,url:canonical(j.url),work_pattern,remote_uk,remote_restricted,
-    workplace:text(j.workplace||''),nearest_station:j.nearest_station||'',office_days:j.office_days??(office?+office[1]:null),
+    workplace:text(j.workplace||inferred?.workplace||''),workplace_note:j.workplace?(j.workplace_note||''):(inferred?.workplace_note||''),nearest_station:j.nearest_station||'',office_days:j.office_days??(office?+office[1]:null),
     salary:j.salary||'',...salaryInfo(j.salary),...(j.salary_min!=null?{salary_min:+j.salary_min}:{}),closing_date:dateOnly(j.closing_date),posting_date:dateOnly(j.posting_date),
     grade:j.grade||description.match(/\b(?:AA|AO|EO|HEO|SEO|Grade [67])\b/)?.[0]||'',contract_type:String(j.contract_type||'Unknown'),employer_type:String(j.employer_type||'Unknown'),
     source:j.source||'Manual import',reference:String(j.reference||''),verified_open:!!j.verified_open,credible:!!j.credible,

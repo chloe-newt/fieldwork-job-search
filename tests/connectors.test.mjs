@@ -43,7 +43,7 @@ test('hosted careers URLs resolve locally, including European Lever, and reject 
   assert.equal(sourceFromURL('https://jobs.ashbyhq.com/synthesia').name,'Synthesia');
   assert.equal(sourceFromURL('https://jobs.ashbyhq.com/unknown').credible,false);
   for(const url of ['https://jobs.ashbyhq.com.evil.example/foo','http://jobs.ashbyhq.com/foo','https://jobs.ashbyhq.com/','https://user:pass@jobs.ashbyhq.com/foo','https://jobs.ashbyhq.com/%2e%2e'])assert.throws(()=>sourceFromURL(url));
-  assert.equal(new Set(SOURCE_CATALOG.map(c=>c.id)).size,11);
+  assert.equal(new Set(SOURCE_CATALOG.map(c=>c.id)).size,SOURCE_CATALOG.length);
 });
 
 test('Indeed link variants canonicalise by job key without accepting spoofed domains',()=>{

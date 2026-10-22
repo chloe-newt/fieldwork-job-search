@@ -11,6 +11,7 @@ import {canonical,now,dateOnly} from './src/util.mjs';
 import {FAMILIES,QUERIES} from './src/defaults.mjs';
 import {SOURCE_CATALOG,sourceFromURL} from './src/catalog.mjs';
 import {advertDraft} from './src/import.mjs';
+import {normaliseSkills} from './src/engine.mjs';
 const ROOT=path.dirname(fileURLToPath(import.meta.url));
 const logDir=path.join(ROOT,'logs');fs.mkdirSync(logDir,{recursive:true});
 const logFile=path.join(logDir,'server.log');
@@ -48,7 +49,7 @@ if(args.includes('--backup')){
         const complete=store.db.prepare("SELECT * FROM runs WHERE status='success' AND checked>0 ORDER BY id DESC LIMIT 1").get();
         const due=sources.filter(s=>s.enabled&&s.type!=='manual'&&!(s.type==='brave'&&!cfg.brave_key)).map(s=>s.next_due).sort()[0]||null;
         send(res,200,{token:csrf,jobs:store.jobs(),sources,runs,last_success:last||null,last_all_success:complete||null,next_search:cfg.auto_search?due:null,busy:store.busy(),
-          settings:{...cfg,brave_key:cfg.brave_key?'configured':'',tfl_key:cfg.tfl_key?'configured':''},families:FAMILIES,queries:QUERIES,source_catalog:SOURCE_CATALOG,data_directory:DATA});return;
+          settings:{...cfg,brave_key:cfg.brave_key?'configured':'',tfl_key:cfg.tfl_key?'configured':''},skill_check:normaliseSkills(cfg.skills),families:FAMILIES,queries:QUERIES,source_catalog:SOURCE_CATALOG,data_directory:DATA});return;
       }
       if(p==='/api/search'&&req.method==='POST'){
         const b=await body(req);if(store.busy()){send(res,409,{error:'A search is already running'});return;}
@@ -60,7 +61,7 @@ if(args.includes('--backup')){
         for(const [k,[min,max]] of Object.entries(numbers))if(k in b){const v=Number(b[k]);if(!Number.isFinite(v)||v<min||v>max)throw Error(`Invalid ${k}`);out[k]=v;}
         for(const k of ['origin','origin_routing','include_keywords','exclude_keywords','profile_summary'])if(k in b)out[k]=String(b[k]).slice(0,5000);
         for(const k of ['brave_key','tfl_key'])if(k in b&&b[k]!=='configured')out[k]=String(b[k]).trim().slice(0,500);
-        for(const k of ['auto_search','catch_up','routing_enabled'])if(k in b)out[k]=!!b[k];
+        for(const k of ['auto_search','catch_up','routing_enabled','avoid_wet_lab'])if(k in b)out[k]=!!b[k];
         for(const k of ['skills','qualifications','pending_qualifications','certifications','exclude_employers'])if(k in b){if(!Array.isArray(b[k])||b[k].length>100)throw Error(`Invalid ${k}`);out[k]=b[k].map(v=>String(v).trim().toLowerCase()).filter(Boolean);}
         store.saveSettings(out);store.reassess();send(res,200,{ok:true});return;
       }
@@ -68,10 +69,10 @@ if(args.includes('--backup')){
         let b=await body(req);
         if(b.catalog_id){const entry=SOURCE_CATALOG.find(s=>s.id===b.catalog_id);if(!entry)throw Error('Unknown catalogue source');b={...entry};delete b.id}
         const existing=store.sources().find(s=>s.id===b.id);
-        const s=existing?{...existing,enabled:!!b.enabled,interval_hours:Number(b.interval_hours||existing.interval_hours)}:{id:'custom-'+randomBytes(5).toString('hex'),name:String(b.name||'').slice(0,150),type:b.type,board:String(b.board||'').trim(),region:b.region==='eu'?'eu':undefined,url:canonical(b.url),employer:String(b.employer||''),location:String(b.location||''),interval_hours:Number(b.interval_hours||48),enabled:true,credible:!!b.credible,permission_confirmed:!!b.permission_confirmed,employer_type:b.employer_type||'Unknown'};
-        if(!s.name||!['greenhouse','lever','ashby','smartrecruiters','rss','jsonld','manual','nhs','academic','brave'].includes(s.type))throw Error('Invalid source');
+        const s=existing?{...existing,enabled:!!b.enabled,interval_hours:Number(b.interval_hours||existing.interval_hours)}:{id:'custom-'+randomBytes(5).toString('hex'),name:String(b.name||'').slice(0,150),type:b.type,board:String(b.board||'').trim(),region:b.region==='eu'&&['greenhouse','lever'].includes(b.type)?'eu':undefined,url:canonical(b.url),employer:String(b.employer||''),location:String(b.location||''),interval_hours:Number(b.interval_hours||48),enabled:true,credible:!!b.credible,permission_confirmed:!!b.permission_confirmed,employer_type:b.employer_type||'Unknown'};
+        if(!s.name||!['greenhouse','lever','ashby','smartrecruiters','workable','pinpoint','rss','jsonld','manual','nhs','academic','brave'].includes(s.type))throw Error('Invalid source');
         if(!Number.isFinite(s.interval_hours)||s.interval_hours<1||s.interval_hours>720)throw Error('Source interval must be 1–720 hours');
-        if(['greenhouse','lever','ashby','smartrecruiters'].includes(s.type)){
+        if(['greenhouse','lever','ashby','smartrecruiters','workable','pinpoint'].includes(s.type)){
           if(!/^[a-zA-Z0-9_-]{1,100}$/.test(s.board))throw Error('Enter the employer board identifier, not a full URL');
           const duplicate=!existing&&store.sources().find(x=>x.type===s.type&&x.board.toLowerCase()===s.board.toLowerCase()&&(x.region||'')===(s.region||''));
           if(duplicate){send(res,200,{ok:true,id:duplicate.id,existing:true});return;}

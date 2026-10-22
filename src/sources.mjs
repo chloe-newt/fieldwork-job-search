@@ -63,8 +63,29 @@ export async function fetchSource(source,settings,{query='',request=get,readPage
         workplace:uk&&/\b(?:UK|GB|GBR|United Kingdom)\b/i.test(address.addressCountry||'')?address.postalCode||'':'',verified_open:true,direct:true});
     }
   }else if(source.type==='greenhouse'){
-    const data=await get(`https://boards-api.greenhouse.io/v1/boards/${encodeURIComponent(source.board)}/jobs?content=true`,{json:true});if(!Array.isArray(data.jobs))throw Error('Unexpected Greenhouse schema');
+    const data=await request(`https://boards-api${source.region==='eu'?'.eu':''}.greenhouse.io/v1/boards/${encodeURIComponent(source.board)}/jobs?content=true`,{json:true});if(!Array.isArray(data.jobs))throw Error('Unexpected Greenhouse schema');
     for(const j of data.jobs)push({title:j.title,employer:source.name,location:j.location?.name,description:j.content,url:j.absolute_url,reference:String(j.id),posting_date:j.first_published,verified_open:true,direct:true});
+  }else if(source.type==='workable'){
+    const data=await request(`https://apply.workable.com/api/v1/widget/accounts/${encodeURIComponent(source.board)}?details=true`,{json:true});
+    if(!Array.isArray(data.jobs))throw Error('Unexpected Workable schema');
+    for(const j of data.jobs){
+      const places=(j.locations?.length?j.locations:[{city:j.city,country:j.country}]).filter(l=>!l.hidden);
+      const location=places.map(l=>[l.city,l.region||l.state,l.country].filter(Boolean).join(', ')).join(' / ');
+      const uk=/\b(?:UK|United Kingdom|GB|England|Scotland|Wales)\b/i.test(location);
+      push({title:j.title,employer:source.name,location,description:j.description||'',url:j.url||j.shortlink||j.application_url,reference:j.shortcode||j.code||'',
+        posting_date:j.published_on||j.created_at,contract_type:j.employment_type,work_pattern:j.telecommuting?'Remote':'Unknown',remote_uk:!!j.telecommuting&&uk,verified_open:true,direct:true});
+    }
+  }else if(source.type==='pinpoint'){
+    const data=await request(`https://${encodeURIComponent(source.board)}.pinpointhq.com/postings.json`,{json:true});
+    if(!Array.isArray(data.data))throw Error('Unexpected Pinpoint schema');
+    for(const j of data.data){
+      const l=j.location||{},location=[l.street_address,l.city||l.name,l.province,l.postal_code].filter(Boolean).join(', ');
+      const work_pattern=({hybrid:'Hybrid',remote:'Remote',onsite:'On-site',on_site:'On-site',in_office:'On-site'})[String(j.workplace_type||'').toLowerCase()]||'Unknown';
+      const salary=j.compensation_visible&&j.compensation_currency==='GBP'&&j.compensation_frequency==='year'&&j.compensation_minimum?`£${Math.round(j.compensation_minimum)}${j.compensation_maximum?' – £'+Math.round(j.compensation_maximum):''} per year`:'';
+      push({title:j.title,employer:source.name,location,workplace:l.postal_code||'',description:[j.description,j.key_responsibilities_header,j.key_responsibilities,j.skills_knowledge_expertise_header,j.skills_knowledge_expertise].filter(Boolean).join('\n'),
+        url:j.url,reference:j.job?.requisition_id||String(j.id||''),closing_date:j.deadline_at||'',contract_type:j.employment_type_text||j.employment_type,salary,work_pattern,
+        remote_uk:work_pattern==='Remote'&&/England|Scotland|Wales|United Kingdom|UK/i.test(location),verified_open:true,direct:true});
+    }
   }else if(source.type==='lever'){
     let offset=0;for(let page=0;page<12;page++){
       const data=await get(`https://api${source.region==='eu'?'.eu':''}.lever.co/v0/postings/${encodeURIComponent(source.board)}?mode=json&limit=100&skip=${offset}`,{json:true});if(!Array.isArray(data))throw Error('Unexpected Lever schema');
